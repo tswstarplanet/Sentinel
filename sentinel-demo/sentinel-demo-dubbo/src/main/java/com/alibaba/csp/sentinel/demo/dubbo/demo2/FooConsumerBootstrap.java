@@ -19,14 +19,15 @@ import java.util.Collections;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import com.alibaba.csp.sentinel.adapter.dubbo.DubboAdapterGlobalConfig;
 import com.alibaba.csp.sentinel.concurrent.NamedThreadFactory;
 import com.alibaba.csp.sentinel.demo.dubbo.consumer.ConsumerConfiguration;
 import com.alibaba.csp.sentinel.demo.dubbo.consumer.FooServiceConsumer;
-import com.alibaba.csp.sentinel.init.InitExecutor;
 import com.alibaba.csp.sentinel.slots.block.RuleConstant;
 import com.alibaba.csp.sentinel.slots.block.SentinelRpcException;
 import com.alibaba.csp.sentinel.slots.block.flow.FlowRule;
 import com.alibaba.csp.sentinel.slots.block.flow.FlowRuleManager;
+import com.alibaba.dubbo.rpc.RpcResult;
 
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 
@@ -45,12 +46,12 @@ public class FooConsumerBootstrap {
     private static final String RES_KEY = "com.alibaba.csp.sentinel.demo.dubbo.FooService:sayHello(java.lang.String)";
     private static final String INTERFACE_RES_KEY = "com.alibaba.csp.sentinel.demo.dubbo.FooService";
 
+    @SuppressWarnings("PMD.ThreadPoolCreationRule")
     private static final ExecutorService pool = Executors.newFixedThreadPool(10,
         new NamedThreadFactory("dubbo-consumer-pool"));
 
     public static void main(String[] args) {
         initFlowRule();
-        InitExecutor.doInit();
 
         AnnotationConfigApplicationContext consumerContext = new AnnotationConfigApplicationContext();
         consumerContext.register(ConsumerConfiguration.class);
@@ -68,9 +69,7 @@ public class FooConsumerBootstrap {
                     ex.printStackTrace();
                 }
             });
-            pool.submit(() -> {
-                System.out.println("Another: " + service.doAnother());
-            });
+            pool.submit(() -> System.out.println("Another: " + service.doAnother()));
         }
     }
 
@@ -81,5 +80,13 @@ public class FooConsumerBootstrap {
         flowRule.setGrade(RuleConstant.FLOW_GRADE_THREAD);
         flowRule.setLimitApp("default");
         FlowRuleManager.loadRules(Collections.singletonList(flowRule));
+    }
+
+    private static void registerFallback() {
+        // Register fallback handler for consumer.
+        // If you only want to handle degrading, you need to
+        // check the type of BlockException.
+        DubboAdapterGlobalConfig.setConsumerFallback((a, b, ex) ->
+            new RpcResult("Error: " + ex.getClass().getTypeName()));
     }
 }

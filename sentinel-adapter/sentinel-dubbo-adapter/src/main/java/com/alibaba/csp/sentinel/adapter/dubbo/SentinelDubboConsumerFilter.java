@@ -17,17 +17,19 @@ package com.alibaba.csp.sentinel.adapter.dubbo;
 
 import com.alibaba.csp.sentinel.Entry;
 import com.alibaba.csp.sentinel.EntryType;
+import com.alibaba.csp.sentinel.ResourceTypeConstants;
 import com.alibaba.csp.sentinel.SphU;
 import com.alibaba.csp.sentinel.Tracer;
-import com.alibaba.csp.sentinel.context.ContextUtil;
+import com.alibaba.csp.sentinel.log.RecordLog;
 import com.alibaba.csp.sentinel.slots.block.BlockException;
-import com.alibaba.csp.sentinel.slots.block.SentinelRpcException;
 import com.alibaba.dubbo.common.extension.Activate;
 import com.alibaba.dubbo.rpc.Filter;
 import com.alibaba.dubbo.rpc.Invocation;
 import com.alibaba.dubbo.rpc.Invoker;
 import com.alibaba.dubbo.rpc.Result;
 import com.alibaba.dubbo.rpc.RpcException;
+
+import static com.alibaba.dubbo.common.Constants.CONSUMER;
 
 /**
  * <p>Dubbo service consumer filter for Sentinel. Auto activated by default.</p>
@@ -38,33 +40,48 @@ import com.alibaba.dubbo.rpc.RpcException;
  * </pre>
  *
  * @author leyou
+ * @author Eric Zhao
  */
-@Activate(group = "consumer")
+@Activate(group = CONSUMER)
 public class SentinelDubboConsumerFilter extends AbstractDubboFilter implements Filter {
+
+    public SentinelDubboConsumerFilter() {
+        RecordLog.info("Sentinel Dubbo consumer filter initialized");
+    }
 
     @Override
     public Result invoke(Invoker<?> invoker, Invocation invocation) throws RpcException {
         Entry interfaceEntry = null;
         Entry methodEntry = null;
         try {
-            String resourceName = getResourceName(invoker, invocation);
-            ContextUtil.enter(resourceName);
-            interfaceEntry = SphU.entry(invoker.getInterface().getName(), EntryType.OUT);
-            methodEntry = SphU.entry(resourceName, EntryType.OUT);
-            return invoker.invoke(invocation);
+            String prefix = DubboAdapterGlobalConfig.getDubboConsumerPrefix();
+            String interfaceResourceName = getInterfaceName(invoker, prefix);
+            String methodResourceName = getMethodResourceName(invoker, invocation, prefix);
+            interfaceEntry = SphU.entry(interfaceResourceName, ResourceTypeConstants.COMMON_RPC, EntryType.OUT);
+            methodEntry = SphU.entry(methodResourceName, ResourceTypeConstants.COMMON_RPC,
+                EntryType.OUT, invocation.getArguments());
+
+            Result result = invoker.invoke(invocation);
+            if (result.hasException()) {
+                Throwable e = result.getException();
+                // Record common exception.
+                Tracer.traceEntry(e, interfaceEntry);
+                Tracer.traceEntry(e, methodEntry);
+            }
+            return result;
         } catch (BlockException e) {
-            throw new SentinelRpcException(e);
+            return DubboAdapterGlobalConfig.getConsumerFallback().handle(invoker, invocation, e);
         } catch (RpcException e) {
-            Tracer.trace(e);
+            Tracer.traceEntry(e, interfaceEntry);
+            Tracer.traceEntry(e, methodEntry);
             throw e;
         } finally {
             if (methodEntry != null) {
-                methodEntry.exit();
+                methodEntry.exit(1, invocation.getArguments());
             }
             if (interfaceEntry != null) {
                 interfaceEntry.exit();
             }
-            ContextUtil.exit();
         }
     }
 }
